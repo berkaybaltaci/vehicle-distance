@@ -7,6 +7,9 @@ import colorsys
 import os
 from timeit import default_timer as timer
 
+from tensorflow.python.framework.ops import disable_eager_execution
+disable_eager_execution()
+
 import numpy as np
 from keras import backend as K
 from keras.models import load_model
@@ -16,7 +19,7 @@ from PIL import Image, ImageFont, ImageDraw
 from yolo3.model import yolo_eval, yolo_body, tiny_yolo_body
 from yolo3.utils import letterbox_image
 import os
-from keras.utils import multi_gpu_model
+from tensorflow.python.keras.utils.multi_gpu_utils import multi_gpu_model
 
 class YOLO(object):
     _defaults = {
@@ -28,7 +31,7 @@ class YOLO(object):
         "classes_path": 'model_data/coco_classes.txt',
         "score" : 0.3,
         "iou" : 0.45,
-        "model_image_size" : (416, 416),
+        "model_image_size" : (128, 128),
         "gpu_num" : 1,
     }
 
@@ -145,6 +148,11 @@ class YOLO(object):
         max_top = 0
         max_bottom = 0
         id = 0
+        height=1
+        max_score = 1
+
+        draw = ImageDraw.Draw(image)
+
         for i, c in reversed(list(enumerate(out_classes))):
             predicted_class = self.class_names[c]
             box = out_boxes[i]
@@ -164,7 +172,8 @@ class YOLO(object):
             else:
                 text_origin = np.array([left, top + 1])
 
-            if predicted_class == 'car':
+            if predicted_class == 'car' or predicted_class == 'truck' or predicted_class == 'bus':
+            # if predicted_class =='person':
                 w = right - left
                 h = top - bottom
                 area1 = abs(w*h)
@@ -191,7 +200,9 @@ class YOLO(object):
         d = (car_original_height * f)/ height
         d = d/12
         distance = 'd='
-        unit = 'ft'
+        # unit = 'ft'
+        unit = 'm'
+        d *= 0.3048 # converting to m
         text = '{} {:.2f} {}'.format(distance, d, unit)
         x, y = (max_left + id + 10, max_top + id - 25)
         # text = 'hello'

@@ -4,9 +4,11 @@ import os
 from timeit import default_timer as timer
 from yolo import YOLO, detect_video
 from PIL import Image
+from tensorflow.python.framework.ops import disable_eager_execution
+disable_eager_execution()
 
-test_dir = "../Dir" # Here put your directory of images which needs to be detected
-save_dir ="../saved_result/" # Here put your directory where you want to save the images
+test_dir = "./videos" # Here put your directory of images which needs to be detected
+save_dir ="./saved_result/" # Here put your directory where you want to save the images
 testfiles= os.listdir(test_dir)
 
 def detect_img(yolo):
@@ -66,7 +68,7 @@ if __name__ == '__main__':
     Command line positional arguments -- for video detection mode
     '''
     parser.add_argument(
-        "--input", nargs='?', type=str,required=False,default='./path2your_video/',
+        "--input", nargs='?', type=str,required=False,default='./videos/london_driving.mp4',
         help = "Video input path"
     )
 
