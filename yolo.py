@@ -3,36 +3,44 @@
 Class definition of YOLO_v3 style detection model on image and video
 """
 
+import time
+from threading import Thread
+from playsound import playsound
+from keras.utils import multi_gpu_utils
+from yolo3.utils import letterbox_image
+from yolo3.model import yolo_eval, yolo_body, tiny_yolo_body
+from PIL import Image, ImageFont, ImageDraw
+from keras.layers import Input
+from keras.models import load_model
+from keras import backend as K
+import numpy as np
+from ast import arg
 import colorsys
+from concurrent.futures import thread
 import os
 from timeit import default_timer as timer
 
 from tensorflow.python.framework.ops import disable_eager_execution
 disable_eager_execution()
 
-import numpy as np
-from keras import backend as K
-from keras.models import load_model
-from keras.layers import Input
-from PIL import Image, ImageFont, ImageDraw
 
-from yolo3.model import yolo_eval, yolo_body, tiny_yolo_body
-from yolo3.utils import letterbox_image
-import os
-from tensorflow.python.keras.utils.multi_gpu_utils import multi_gpu_model
+def play_alarm_sound():
+    playsound('alarm3.wav')
+
+alarm_thread = None
 
 class YOLO(object):
     _defaults = {
         # "model_path": 'model_data/yolo.h5',
         # "model_path": 'model_data/trained_weights_final.h5', # main yolo
-        "model_path": 'model_data/yolo_weights.h5', #bottleneck yolo
+        "model_path": 'model_data/yolo_weights.h5',  # bottleneck yolo
         # "model_path": 'model_data/trained_weights_stage_1.h5',
         "anchors_path": 'model_data/yolo_anchors.txt',
         "classes_path": 'model_data/coco_classes.txt',
-        "score" : 0.3,
-        "iou" : 0.45,
-        "model_image_size" : (128, 128),
-        "gpu_num" : 1,
+        "score": 0.3,
+        "iou": 0.45,
+        "model_image_size": (256, 256),
+        "gpu_num": 1,
     }
 
     @classmethod
@@ -43,8 +51,8 @@ class YOLO(object):
             return "Unrecognized attribute name '" + n + "'"
 
     def __init__(self, **kwargs):
-        self.__dict__.update(self._defaults) # set up default values
-        self.__dict__.update(kwargs) # and update with user overrides
+        self.__dict__.update(self._defaults)  # set up default values
+        self.__dict__.update(kwargs)  # and update with user overrides
         self.class_names = self._get_class()
         self.anchors = self._get_anchors()
         self.sess = K.get_session()
@@ -66,18 +74,20 @@ class YOLO(object):
 
     def generate(self):
         model_path = os.path.expanduser(self.model_path)
-        assert model_path.endswith('.h5'), 'Keras model or weights must be a .h5 file.'
+        assert model_path.endswith(
+            '.h5'), 'Keras model or weights must be a .h5 file.'
 
         # Load model, or construct model and load weights.
         num_anchors = len(self.anchors)
         num_classes = len(self.class_names)
-        is_tiny_version = num_anchors==6 # default setting
+        is_tiny_version = num_anchors == 6  # default setting
         try:
             self.yolo_model = load_model(model_path, compile=False)
         except:
-            self.yolo_model = tiny_yolo_body(Input(shape=(None,None,3)), num_anchors//2, num_classes) \
-                if is_tiny_version else yolo_body(Input(shape=(None,None,3)), num_anchors//3, num_classes)
-            self.yolo_model.load_weights(self.model_path) # make sure model, anchors and classes match
+            self.yolo_model = tiny_yolo_body(Input(shape=(None, None, 3)), num_anchors//2, num_classes) \
+                if is_tiny_version else yolo_body(Input(shape=(None, None, 3)), num_anchors//3, num_classes)
+            # make sure model, anchors and classes match
+            self.yolo_model.load_weights(self.model_path)
         else:
             assert self.yolo_model.layers[-1].output_shape[-1] == \
                 num_anchors/len(self.yolo_model.output) * (num_classes + 5), \
@@ -93,26 +103,30 @@ class YOLO(object):
             map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)),
                 self.colors))
         np.random.seed(10101)  # Fixed seed for consistent colors across runs.
-        np.random.shuffle(self.colors)  # Shuffle colors to decorrelate adjacent classes.
+        # Shuffle colors to decorrelate adjacent classes.
+        np.random.shuffle(self.colors)
         np.random.seed(None)  # Reset seed to default.
 
         # Generate output tensor targets for filtered bounding boxes.
         self.input_image_shape = K.placeholder(shape=(2, ))
-        if self.gpu_num>=2:
-            self.yolo_model = multi_gpu_model(self.yolo_model, gpus=self.gpu_num)
+        if self.gpu_num >= 2:
+            self.yolo_model = multi_gpu_model(
+                self.yolo_model, gpus=self.gpu_num)
         boxes, scores, classes = yolo_eval(self.yolo_model.output, self.anchors,
-                len(self.class_names), self.input_image_shape,
-                score_threshold=self.score, iou_threshold=self.iou)
+                                           len(self.class_names), self.input_image_shape,
+                                           score_threshold=self.score, iou_threshold=self.iou)
         return boxes, scores, classes
 
     def detect_image(self, image):
         start = timer()
         print('detecting images')
+        starting_time = time.perf_counter()
 
         if self.model_image_size != (None, None):
-            assert self.model_image_size[0]%32 == 0, 'Multiples of 32 required'
-            assert self.model_image_size[1]%32 == 0, 'Multiples of 32 required'
-            boxed_image = letterbox_image(image, tuple(reversed(self.model_image_size)))
+            assert self.model_image_size[0] % 32 == 0, 'Multiples of 32 required'
+            assert self.model_image_size[1] % 32 == 0, 'Multiples of 32 required'
+            boxed_image = letterbox_image(
+                image, tuple(reversed(self.model_image_size)))
         else:
             new_image_size = (image.width - (image.width % 32),
                               image.height - (image.height % 32))
@@ -134,12 +148,11 @@ class YOLO(object):
         print('Found {} boxes for {}'.format(len(out_boxes), 'img'))
 
         font = ImageFont.truetype(font='arial.ttf',
-                    size=np.floor(3e-2 * image.size[1] + 0.5).astype('int32'))
+                                  size=np.floor(3e-2 * image.size[1] + 0.5).astype('int32'))
 
-        #If the above font does not work for you please uncomment the following line
+        # If the above font does not work for you please uncomment the following line
         # font = ImageFont.load_default()
         thickness = (image.size[0] + image.size[1]) // 300
-
 
         area = 0
         max_area = 0
@@ -148,7 +161,7 @@ class YOLO(object):
         max_top = 0
         max_bottom = 0
         id = 0
-        height=1
+        height = 1
         max_score = 1
 
         draw = ImageDraw.Draw(image)
@@ -173,7 +186,6 @@ class YOLO(object):
                 text_origin = np.array([left, top + 1])
 
             if predicted_class == 'car' or predicted_class == 'truck' or predicted_class == 'bus':
-            # if predicted_class =='person':
                 w = right - left
                 h = top - bottom
                 area1 = abs(w*h)
@@ -182,7 +194,7 @@ class YOLO(object):
                 if area1 > max_area:
                     max_area = area1
                     id = i
-                    max_left =left
+                    max_left = left
                     max_right = right
                     max_top = top
                     max_bottom = bottom
@@ -192,35 +204,54 @@ class YOLO(object):
                     print('w :', w)
                     print('h :', h)
         # if max_area != 0:
-        ##using car_original_width
-        car_original_width = 72 # in inch
-        car_original_height = 60 # in inch
-        f = 250 # focal length
+        # using car_original_width
+        car_original_width = 72  # in inch
+        car_original_height = 60  # in inch
+        f = 250  # focal length
         # d = (car_original_width * f)/ width
-        d = (car_original_height * f)/ height
+        d = (car_original_height * f) / height
         d = d/12
         distance = 'd='
         # unit = 'ft'
         unit = 'm'
-        d *= 0.3048 # converting to m
+        d *= 0.3048  # converting to m
         text = '{} {:.2f} {}'.format(distance, d, unit)
         x, y = (max_left + id + 10, max_top + id - 25)
         # text = 'hello'
         w, h = font.getsize(text)
         draw.rectangle(
             [max_left + id, max_top + id, max_right - id, max_bottom - id],
-            outline=(255,0,0))
+            outline=(255, 0, 0))
         draw.rectangle(
-            (x,y, x+w, y+h),
-            fill= 'black')
-        draw.text((x, y),text,
-             fill='white', font=font)
+            (x, y, x+w, y+h),
+            fill='black')
+        draw.text((x, y), text,
+                  fill='white', font=font)
+
+        if max_area != 0 and d < 3:
+            if (d < 1):
+                global alarm_thread
+                if alarm_thread is None or not alarm_thread.is_alive():
+                    alarm_thread = Thread(target=play_alarm_sound)
+                    alarm_thread.start()
+                uyari_metni = '{:.2f} METRE YAKINDA ARAC ALGILANDI DIKKAT!!!'.format(
+                    d)
+                draw.text((50, 250), uyari_metni, fill='blue', font=font)
+            else:
+                uyari_metni = '{:.2f} metre yakinda arac algilandi'.format(d)
+                draw.text((50, 250), uyari_metni, fill='white', font=font)
+
         print('score =', max_score)
+        
+        end_time = time.perf_counter()
+        execution_time = end_time - starting_time
+        execution_time_str = "{:.2f}".format(execution_time)
+        print('EXECUTION TIME: ' + execution_time_str + ' ms')
+
         return image
 
     def close_session(self):
         self.sess.close()
-
 
 
 def detect_video(yolo, video_path, output_path=""):
@@ -228,13 +259,14 @@ def detect_video(yolo, video_path, output_path=""):
     vid = cv2.VideoCapture(video_path)
     if not vid.isOpened():
         raise IOError("Couldn't open webcam or video")
-    video_FourCC    = int(vid.get(cv2.CAP_PROP_FOURCC))
-    video_fps       = vid.get(cv2.CAP_PROP_FPS)
-    video_size      = (int(vid.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                        int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    video_FourCC = int(vid.get(cv2.CAP_PROP_FOURCC))
+    video_fps = vid.get(cv2.CAP_PROP_FPS)
+    video_size = (int(vid.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                  int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT)))
     isOutput = True if output_path != "" else False
     if isOutput:
-        print("!!! TYPE:", type(output_path), type(video_FourCC), type(video_fps), type(video_size))
+        print("!!! TYPE:", type(output_path), type(
+            video_FourCC), type(video_fps), type(video_size))
         out = cv2.VideoWriter(output_path, video_FourCC, video_fps, video_size)
     accum_time = 0
     curr_fps = 0
